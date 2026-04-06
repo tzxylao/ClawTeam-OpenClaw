@@ -5,6 +5,32 @@ All notable changes to ClawTeam-OpenClaw are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [PEP 440](https://peps.python.org/pep-0440/) with `+openclaw` local identifier.
 
+## [Unreleased]
+
+### Fixed
+
+- **OpenClaw team coordination now uses a shared data-dir across parent and child workers** so spawned workers operate on the same team state, task registry, and inbox store.
+- **Prompt-injected coordination commands now include explicit `--data-dir`** for task and inbox operations, preventing child workers from drifting into a different runtime world.
+- **OpenClaw coordination prompts were hardened for allowlist mode** by steering workers away from shell wrappers and chained forms such as `sleep`, `set -e`, `&&`, and `;`, which previously caused `exec denied: allowlist miss` in nested worker sessions.
+- **`strategy-room` coordination flow now prefers `task list`, `inbox peek`, and `inbox log` polling** instead of shell-sleep waiting loops.
+- **Decision-editor convergence is more robust**: when specialist inputs remain incomplete after repeated checks, the agent is now instructed to send a clearly labeled provisional memo instead of waiting forever.
+- **Strategy-room leader guidance now reuses canonical template tasks by default** instead of creating duplicate follow-up tasks for the same specialist roles, reducing false-looking pending tasks after the main workflow completes.
+- **Task waiting now exposes recoverable worker outputs** from local OpenClaw session files and logs, making it easier to recover useful results when task state lags behind actual worker progress.
+- **Workspace/worktree fallback handling was strengthened** for OpenClaw-driven team spawns and related test coverage was added.
+
+### Added
+
+- `runtime recover-openclaw` command for recovering worker outputs from local OpenClaw session files in fallback compatibility mode.
+- Regression coverage for:
+  - shared workspace/worktree fallback behavior
+  - prompt hardening and backend propagation
+  - strategy-room template anti-duplication guidance
+
+### Validation
+
+- Targeted and broadened regression suites now pass with **56 tests green**.
+- End-to-end isolated `strategy-room` validation confirmed that worker startup, task transitions, inbox messaging, decision-editor memo delivery, and strategy-lead final recommendation all complete successfully under the patched flow.
+
 ## [0.3.0+openclaw1] - 2026-04-04
 
 ### Added
