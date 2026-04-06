@@ -14,8 +14,8 @@ Workflow:
 1. Frame the decision or planning problem clearly
 2. Create focused tasks for each specialist via `clawteam task create {team_name} "[task]" -o [member]`
 3. Send context and instructions via `clawteam inbox send {team_name} [member] "[instructions]"`
-4. Monitor progress via `clawteam board show {team_name}`
-5. Wait for the decision-editor's strategy memo
+4. Monitor progress via `clawteam task list {team_name}` and `clawteam inbox peek {team_name} --agent strategy-lead`
+5. Wait for the decision-editor's strategy memo by re-checking the inbox/task state, not shell sleep commands
 6. Produce a final recommendation with:
    - recommended path
    - rejected alternatives
@@ -87,16 +87,19 @@ task = """You are the Decision Editor. Consolidate specialist outputs into a dec
 The team goal is: {goal}
 
 Workflow:
-1. Wait for messages from systems-analyst, delivery-planner, and risk-mapper via `clawteam inbox receive {team_name}`
-2. Consolidate them into:
+1. Re-check your inbox with `clawteam inbox peek {team_name} --agent decision-editor` while specialists are still working
+2. When ready to consume pending messages, use `clawteam inbox receive {team_name} --agent decision-editor`
+3. Consolidate them into:
    - problem framing
    - options considered
    - major risks
    - execution sequence
    - unresolved assumptions
-3. Send the memo to strategy-lead:
+4. Send the memo to strategy-lead:
    `clawteam inbox send {team_name} strategy-lead "MEMO: [decision-ready strategy memo]"`
-4. Update your task status when done
+5. Update your task status when done
+
+If some specialist inputs are still missing after repeated inbox/task checks, send a clearly labeled provisional memo describing what is missing instead of blocking forever.
 
 Do not recommend the final path yourself. Your job is to turn specialist output into a decision-ready memo for the strategy-lead."""
 

@@ -49,6 +49,8 @@ def build_agent_prompt(
     end_state: str = "",
     constraints: list[str] | None = None,
     team_size: int = 1,
+    clawteam_bin: str = "clawteam",
+    data_dir: str = "",
 ) -> str:
     """Build agent prompt: identity + mission + task + optional workspace info."""
     lines = [
@@ -92,22 +94,28 @@ def build_agent_prompt(
         ])
     if team_size > 1:
         lines.extend(["", BOIDS_RULES])
+    clawteam_prefix = f"{clawteam_bin} --data-dir {data_dir}" if data_dir else clawteam_bin
     lines.extend([
         "",
         "## Task\n",
         task,
         "",
         "## Coordination Protocol\n",
-        "- IMPORTANT: spawned OpenClaw workers run under exec allowlist mode. Use only the allowlisted executable path from $CLAWTEAM_BIN, not arbitrary shell commands.",
-        f"- First action: run `clawteam task list {team_name} --owner {agent_name}` to discover your task ID.",
-        f"- Starting a task: `clawteam task update {team_name} <task-id> --status in_progress`",
-        f"- Finishing a task: `clawteam task update {team_name} <task-id> --status completed`",
-        "- When you finish all tasks, send a summary to the leader:",
-        f'  `clawteam inbox send {team_name} {leader_name} "All tasks completed. <brief summary>"`',
-        "- If you are blocked or any clawteam command is denied/fails, message the leader immediately with the exact error text:",
-        f'  `clawteam inbox send {team_name} {leader_name} "Blocked: <exact error>"`',
-        f"- After finishing work, report your costs: `clawteam cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
-        f"- Before finishing, save your session: `clawteam session save {team_name} --session-id <id>`",
+        f"- IMPORTANT: spawned OpenClaw workers run under exec allowlist mode. Use only this allowlisted executable path: `{clawteam_bin}`. Do not rely on `$CLAWTEAM_BIN` or shell expansion.",
+        f"- IMPORTANT: use the shared team data-dir for every clawteam command: `{data_dir}`." if data_dir else "- Use the current clawteam data-dir consistently for every coordination command.",
+        f"- Preferred first action: run `{clawteam_prefix} task list {team_name} --owner {agent_name}` to discover your task ID.",
+        f"- If task-list or inbox commands are blocked by OpenClaw exec policy, DO NOT stop immediately. Continue the substantive task using the prompt/task description, and print your working notes + final result to stdout as a fallback artifact.",
+        f"- Starting a task when allowed: `{clawteam_prefix} task update {team_name} <task-id> --status in_progress`",
+        f"- Finishing a task when allowed: `{clawteam_prefix} task update {team_name} <task-id> --status completed`",
+        "- When you finish all tasks, send a summary to the leader if allowed:",
+        f'  `{clawteam_prefix} inbox send {team_name} {leader_name} "All tasks completed. <brief summary>"`',
+        "- If you are blocked or any clawteam command is denied/fails, print the exact error text and continue with the task body whenever possible.",
+        f'  Example if allowed: `{clawteam_prefix} inbox send {team_name} {leader_name} "Blocked: <exact error>"`',
+        f"- Prefer one direct clawteam command per action. Avoid shell wrappers, ad-hoc shell utilities, and chained forms like `set -e`, `sleep`, `&&`, or `;` because they can trigger OpenClaw allowlist misses.",
+        "- If you need to wait for teammates, do it by periodically re-checking `task list`, `inbox peek`, or `inbox log` instead of shell sleep loops.",
+        f"- After finishing work, report your costs when allowed: `{clawteam_prefix} cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
+        f"- Before finishing, save your session when allowed: `{clawteam_prefix} session save {team_name} --session-id <id>`",
+        "- Always emit a final plain-text summary to stdout before exiting, even if clawteam CLI calls are blocked.",
         "- When you finish all tasks, type `exit` to terminate this session.",
         "",
         METACOGNITION_BLOCK,

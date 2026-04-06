@@ -133,6 +133,9 @@ class TmuxBackend(SpawnBackend):
         transport = os.environ.get("CLAWTEAM_TRANSPORT", "")
         if transport:
             env_vars["CLAWTEAM_TRANSPORT"] = transport
+        data_dir = os.environ.get("CLAWTEAM_DATA_DIR", "")
+        if data_dir:
+            env_vars["CLAWTEAM_DATA_DIR"] = data_dir
         if cwd:
             env_vars["CLAWTEAM_WORKSPACE_DIR"] = cwd
         if model:
@@ -183,28 +186,28 @@ class TmuxBackend(SpawnBackend):
         if model and is_claude_command(normalized_command):
             final_command.extend(["--model", model])
 
+        # OpenClaw TUI / agent: DO NOT inject `--model` for now.
+        # The installed OpenClaw on this machine does not support
+        # `openclaw agent --model ...`; injecting it causes worker startup to
+        # fail immediately with `error: unknown option '--model'`.
+        # We still export CLAWTEAM_MODEL in env for future compatibility.
+
         # OpenClaw TUI: pass --message for initial prompt and --session for isolation
         if is_openclaw_command(normalized_command):
             session_key = f"clawteam-{team_name}-{agent_name}"
             if final_command[0].endswith("openclaw") and len(final_command) == 1:
                 final_command = [final_command[0], "tui", "--session", session_key]
-                if model:
-                    final_command.extend(["--model", model])
                 if openclaw_agent:
                     final_command.extend(["--agent", openclaw_agent])
                 if prompt:
                     final_command.extend(["--message", prompt])
             elif "tui" in final_command:
                 final_command.extend(["--session", session_key])
-                if model:
-                    final_command.extend(["--model", model])
                 if openclaw_agent:
                     final_command.extend(["--agent", openclaw_agent])
                 if prompt:
                     final_command.extend(["--message", prompt])
             elif "agent" in final_command:
-                if model:
-                    final_command.extend(["--model", model])
                 if openclaw_agent:
                     final_command.extend(["--agent", openclaw_agent])
                 if prompt:

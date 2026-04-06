@@ -24,12 +24,15 @@ class TestBuildAgentPrompt:
         prompt = build_agent_prompt(
             agent_name="w", agent_id="id", agent_type="t",
             team_name="team", leader_name="lead", task="do stuff",
+            data_dir="/tmp/clawteam-data",
         )
-        assert "clawteam task list" in prompt
-        assert "clawteam task update" in prompt
-        assert "clawteam inbox send" in prompt
-        assert "clawteam cost report" in prompt
-        assert "clawteam session save" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data task list" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data task update" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data inbox send" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data cost report" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data session save" in prompt
+        assert "Avoid shell wrappers, ad-hoc shell utilities, and chained forms like `set -e`, `sleep`, `&&`, or `;`" in prompt
+        assert "re-checking `task list`, `inbox peek`, or `inbox log`" in prompt
 
     def test_prompt_includes_user_when_provided(self):
         prompt = build_agent_prompt(
@@ -70,10 +73,11 @@ class TestBuildAgentPrompt:
         prompt = build_agent_prompt(
             agent_name="dev", agent_id="id", agent_type="t",
             team_name="my-team", leader_name="boss", task="task",
+            data_dir="/tmp/clawteam-data",
         )
-        assert "clawteam task list my-team --owner dev" in prompt
-        assert "clawteam inbox send my-team boss" in prompt
-        assert "clawteam cost report my-team" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data task list my-team --owner dev" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data inbox send my-team boss" in prompt
+        assert "clawteam --data-dir /tmp/clawteam-data cost report my-team" in prompt
 
     # --- Intent-based prompt (Auftragstaktik) ---
 

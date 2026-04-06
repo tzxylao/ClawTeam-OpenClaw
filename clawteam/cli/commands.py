@@ -80,6 +80,144 @@ def _output(data: dict | list, human_fn=None):
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _candidate_openclaw_session_files(session_id: str) -> list[Path]:
+    """Return candidate local OpenClaw session files for a given session id."""
+    home = Path.home()
+    roots = [home / ".openclaw" / "agents"]
+    files: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        files.extend(root.glob(f"*/sessions/{session_id}.jsonl"))
+    return [p for p in files if p.exists()]
+
+
+def _extract_latest_assistant_text_from_session_file(path: Path) -> Optional[str]:
+    """Extract the latest assistant text message from an OpenClaw session jsonl file."""
+    latest_text: Optional[str] = None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "message":
+                    continue
+                msg = obj.get("message") or {}
+                if msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content") or []
+                parts: list[str] = []
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text = item.get("text")
+                            if isinstance(text, str) and text.strip():
+                                parts.append(text.strip())
+                if parts:
+                    latest_text = "\n\n".join(parts)
+    except OSError:
+        return None
+    return latest_text
+
+
+def _tail_openclaw_log_hits(session_id: str, limit: int = 4) -> list[str]:
+    """Fallback: scan the daily OpenClaw log for lines mentioning a session id."""
+    log_dir = Path("/tmp/openclaw")
+    if not log_dir.exists():
+        return []
+    logs = sorted(log_dir.glob("openclaw-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    hits: list[str] = []
+    for log in logs[:3]:
+        try:
+            with log.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if session_id in line:
+                        hits.append(line.rstrip())
+        except OSError:
+            continue
+        if hits:
+            break
+    return hits[-limit:]
+
+
+def _recover_openclaw_outputs(team: str, agent: Optional[str] = None) -> list[dict]:
+    """Recover worker outputs from local OpenClaw session files (fallback compat mode)."""
+    from clawteam.spawn.registry import get_registry
+
+    registry = get_registry(team)
+    items: list[dict] = []
+
+    for agent_name, info in sorted(registry.items()):
+        if agent and agent_name != agent:
+            continue
+
+        session_id = f"clawteam-{team}-{agent_name}"
+        session_files = _candidate_openclaw_session_files(session_id)
+        latest_text = None
+        selected_file = None
+        for session_file in session_files:
+            extracted = _extract_latest_assistant_text_from_session_file(session_file)
+            if extracted:
+                latest_text = extracted
+                selected_file = session_file
+                break
+
+        log_hits = _tail_openclaw_log_hits(session_id)
+        items.append(
+            {
+                "agent": agent_name,
+                "backend": info.get("backend", ""),
+                "pid": info.get("pid", 0),
+                "sessionId": session_id,
+                "sessionFile": str(selected_file) if selected_file else None,
+                "recoveredText": latest_text,
+                "logHits": log_hits,
+            }
+        )
+
+    return items
+
+
+def _build_recovered_summary(recovered_outputs: list[dict], task_details: list[dict]) -> dict:
+    """Summarize which agents produced recoverable output even if tasks stayed pending."""
+    task_by_owner = {}
+    for task in task_details:
+        owner = task.get("owner") or ""
+        if owner:
+            task_by_owner.setdefault(owner, []).append(task)
+
+    recovered_agents = []
+    pending_with_output = []
+    for item in recovered_outputs:
+        text = item.get("recoveredText")
+        if not text:
+            continue
+        agent_name = item.get("agent") or ""
+        recovered_agents.append(agent_name)
+        owner_tasks = task_by_owner.get(agent_name, [])
+        pending_tasks = [t for t in owner_tasks if t.get("status") != "completed"]
+        pending_with_output.append(
+            {
+                "agent": agent_name,
+                "sessionId": item.get("sessionId"),
+                "taskIds": [t.get("id") for t in pending_tasks],
+                "taskSubjects": [t.get("subject") for t in pending_tasks],
+                "preview": text[:240],
+            }
+        )
+
+    return {
+        "recoveredAgentCount": len(recovered_agents),
+        "recoveredAgents": recovered_agents,
+        "pendingTasksWithRecoveredOutput": pending_with_output,
+    }
+
+
 # ============================================================================
 # Config Commands
 # ============================================================================
@@ -913,6 +1051,44 @@ def runtime_state(
     _output(state, _human)
 
 
+@runtime_app.command("recover-openclaw")
+def runtime_recover_openclaw(
+    team: str = typer.Argument(..., help="Team name"),
+    agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Recover only one agent"),
+):
+    """Recover worker outputs from local OpenClaw session files (fallback compat mode)."""
+    items = _recover_openclaw_outputs(team=team, agent=agent)
+    data = {"team": team, "items": items}
+
+    def _human(d):
+        console.print(f"Recovered OpenClaw worker outputs for '[cyan]{team}[/cyan]':")
+        if not d["items"]:
+            console.print("[dim]No agents found in spawn registry.[/dim]")
+            return
+        for item in d["items"]:
+            console.print(
+                f"\n[bold]{item['agent']}[/bold]  "
+                f"backend={item['backend'] or '-'} pid={item['pid'] or '-'}"
+            )
+            console.print(f"  sessionId: {item['sessionId']}")
+            if item.get("sessionFile"):
+                console.print(f"  sessionFile: {item['sessionFile']}")
+            if item.get("recoveredText"):
+                preview = item["recoveredText"]
+                if len(preview) > 1200:
+                    preview = preview[:1200] + "\n...[truncated]"
+                console.print("  recoveredText:")
+                console.print(preview)
+            elif item.get("logHits"):
+                console.print("  logHits:")
+                for line in item["logHits"]:
+                    console.print(f"    {line[:500]}")
+            else:
+                console.print("  [dim]No recoverable output found.[/dim]")
+
+    _output(data, _human)
+
+
 # ============================================================================
 # Task Commands
 # ============================================================================
@@ -1378,6 +1554,7 @@ def task_wait(
     result = waiter.wait()
 
     if _json_output:
+        recovered_outputs = _recover_openclaw_outputs(team)
         print(json.dumps({
             "event": "result",
             "status": result.status,
@@ -1389,6 +1566,8 @@ def task_wait(
             "blocked": result.blocked,
             "messages_received": result.messages_received,
             "task_details": result.task_details,
+            "recovered_outputs": recovered_outputs,
+            "recovered_summary": _build_recovered_summary(recovered_outputs, result.task_details),
         }), flush=True)
     else:
         console.print()
@@ -1409,6 +1588,22 @@ def task_wait(
                 f" {result.completed}/{result.total} completed."
             )
             _print_incomplete_tasks(result.task_details)
+
+        recovered = _recover_openclaw_outputs(team)
+        recovered = [item for item in recovered if item.get("recoveredText")]
+        if recovered:
+            summary = _build_recovered_summary(recovered, result.task_details)
+            console.print("\n[bold]Recovered OpenClaw worker outputs:[/bold]")
+            console.print(
+                f"  recovered agents: {summary['recoveredAgentCount']}"
+                f"  -> {', '.join(summary['recoveredAgents'])}"
+            )
+            for item in recovered:
+                preview = item["recoveredText"]
+                if len(preview) > 800:
+                    preview = preview[:800] + "\n...[truncated]"
+                console.print(f"\n[cyan]{item['agent']}[/cyan] ({item['sessionId']}):")
+                console.print(preview)
 
     if result.status != "completed":
         raise typer.Exit(1)
@@ -1923,7 +2118,7 @@ def spawn_agent(
         current_count = len(get_registry(_team))
         warning = check_agent_count(current_count, max_agents=DEFAULT_MAX_AGENTS)
         if warning:
-            console.print(f"[yellow]{warning}[/yellow]", err=True)
+            console.print(f"[yellow]{warning}[/yellow]")
 
     # Resolve skip_permissions from config
     if skip_permissions is None:
@@ -1950,22 +2145,33 @@ def spawn_agent(
 
     if workspace:
         from clawteam.workspace import get_workspace_manager
+        from clawteam.workspace import git as workspace_git
         ws_mgr = get_workspace_manager(repo)
         if ws_mgr is None:
             if ws_mode not in ("auto", ""):
                 console.print("[red]Not in a git repository. Use --repo or cd into a repo.[/red]")
                 raise typer.Exit(1)
         else:
-            ws_info = ws_mgr.create_workspace(team_name=_team, agent_name=_name, agent_id=_id)
-            cwd = _workspace_cwd_from_info(repo, ws_info)
-            ws_branch = ws_info.branch_name
-            console.print(f"[dim]Workspace: {cwd} (branch: {ws_branch})[/dim]")
+            try:
+                ws_info = ws_mgr.create_workspace(team_name=_team, agent_name=_name, agent_id=_id)
+            except workspace_git.GitError as e:
+                if ws_mode not in ("auto", ""):
+                    console.print(f"[red]Workspace setup failed: {e}[/red]")
+                    raise typer.Exit(1)
+                console.print(f"[yellow]Workspace auto-disabled: {e}[/yellow]")
+                ws_mgr = None
+            else:
+                cwd = _workspace_cwd_from_info(repo, ws_info)
+                ws_branch = ws_info.branch_name
+                console.print(f"[dim]Workspace: {cwd} (branch: {ws_branch})[/dim]")
+
 
     # Build prompt: identity + task + clawteam coordination guide
     prompt = None
     if task:
         import os as _os
 
+        from clawteam.spawn.cli_env import resolve_clawteam_executable
         from clawteam.spawn.prompt import build_agent_prompt
         from clawteam.team.manager import TeamManager
 
@@ -1981,6 +2187,8 @@ def spawn_agent(
             workspace_dir=cwd or "",
             workspace_branch=ws_branch,
             memory_scope=f"custom:team-{_team}",
+            clawteam_bin=resolve_clawteam_executable(),
+            data_dir=_os.environ.get("CLAWTEAM_DATA_DIR", ""),
         )
 
     # Session resume: inject --resume flag for claude commands
@@ -2454,6 +2662,7 @@ def launch_team(
 
     from clawteam.model_resolution import resolve_model
     from clawteam.spawn import get_backend, normalize_backend_name
+    from clawteam.spawn.cli_env import resolve_clawteam_executable
     from clawteam.spawn.prompt import build_agent_prompt
     from clawteam.team.manager import TeamManager
     from clawteam.team.tasks import TaskStore
@@ -2473,7 +2682,7 @@ def launch_team(
         total_agents = len(tmpl.agents) + 1  # agents + leader
         warning = check_agent_count(total_agents - 1, tmpl.max_agents)
         if warning:
-            console.print(f"[yellow]{warning}[/yellow]", err=True)
+            console.print(f"[yellow]{warning}[/yellow]")
 
     # 2. Determine team name
     t_name = team_name or f"{tmpl.name}-{uuid.uuid4().hex[:6]}"
@@ -2556,9 +2765,13 @@ def launch_team(
         cwd = None
         ws_branch = ""
         if ws_mgr:
-            ws_info = ws_mgr.create_workspace(
-                team_name=t_name, agent_name=agent.name, agent_id=a_id,
-            )
+            try:
+                ws_info = ws_mgr.create_workspace(
+                    team_name=t_name, agent_name=agent.name, agent_id=a_id,
+                )
+            except Exception as e:
+                console.print(f"[red]Workspace setup failed for agent '{agent.name}': {e}[/red]")
+                raise typer.Exit(1)
             cwd = _workspace_cwd_from_info(repo, ws_info)
             ws_branch = ws_info.branch_name
 
@@ -2578,6 +2791,8 @@ def launch_team(
             end_state=agent.end_state or "",
             constraints=agent.constraints,
             team_size=len(all_agents),
+            clawteam_bin=resolve_clawteam_executable(),
+            data_dir=_os.environ.get("CLAWTEAM_DATA_DIR", ""),
         )
 
         # Resolve skip_permissions from config

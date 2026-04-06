@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from clawteam.spawn.base import SpawnBackend
 from clawteam.spawn.cli_env import (
@@ -71,6 +72,9 @@ class SubprocessBackend(SpawnBackend):
         transport = os.environ.get("CLAWTEAM_TRANSPORT", "")
         if transport:
             spawn_env["CLAWTEAM_TRANSPORT"] = transport
+        data_dir = os.environ.get("CLAWTEAM_DATA_DIR", "")
+        if data_dir:
+            spawn_env["CLAWTEAM_DATA_DIR"] = data_dir
         if cwd:
             spawn_env["CLAWTEAM_WORKSPACE_DIR"] = cwd
         if model:
@@ -98,10 +102,13 @@ class SubprocessBackend(SpawnBackend):
             elif is_gemini_command(normalized_command) or is_kimi_command(normalized_command) or is_opencode_command(normalized_command):
                 final_command.append("--yolo")
         # Claude Code: pass --model if specified
-        # Pass --model if specified (claude, openclaw)
+        # NOTE: do NOT pass --model to OpenClaw here.
+        # Current local OpenClaw `agent` CLI does not support `--model`, and
+        # injecting it causes workers to exit immediately with:
+        #   error: unknown option '--model'
+        # Keep CLAWTEAM_MODEL in env for future compatibility / introspection,
+        # but avoid CLI injection until the installed OpenClaw actually supports it.
         if model and is_claude_command(normalized_command):
-            final_command.extend(["--model", model])
-        if model and is_openclaw_command(normalized_command):
             final_command.extend(["--model", model])
         if is_kimi_command(normalized_command):
             if cwd and not command_has_workspace_arg(normalized_command):
@@ -120,30 +127,36 @@ class SubprocessBackend(SpawnBackend):
                 # OpenClaw agent mode: use --message for the prompt
                 if "agent" not in final_command and "tui" not in final_command:
                     final_command.insert(1, "agent")
+                # Ensure machine-readable output so subprocess workers can be
+                # harvested from stdout logs even when clawteam CLI callbacks
+                # are blocked by newer OpenClaw exec policy.
+                if "--json" not in final_command:
+                    final_command.append("--json")
                 # Isolate each agent in its own session
                 session_key = f"clawteam-{team_name}-{agent_name}"
                 final_command.extend(["--session-id", session_key, "--message", prompt])
             else:
                 final_command.extend(["-p", prompt])
 
-        wrapper_command = [
-            sys.executable,
-            "-m",
-            "clawteam.spawn.subprocess_wrapper",
-            "--team",
-            team_name,
-            "--agent",
-            agent_name,
-            "--",
-            *final_command,
-        ]
+        logs_dir = Path.home() / ".clawteam" / "teams" / team_name / "agent-logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = logs_dir / f"{agent_name}.stdout.log"
+        stderr_path = logs_dir / f"{agent_name}.stderr.log"
+        stdout_f = open(stdout_path, "ab")
+        stderr_f = open(stderr_path, "ab")
 
+        # Use raw argv execution instead of shell=True wrapping for OpenClaw
+        # workers. Newer OpenClaw / Gateway combinations appear to lose or
+        # reroute stdout/stderr when launched behind the previous shell+trap
+        # wrapper, which breaks ClawTeam's ability to harvest worker output.
+        # Prefer reliable output capture first; lifecycle cleanup can be
+        # recovered separately if needed.
         process = subprocess.Popen(
-            wrapper_command,
+            final_command,
+            shell=False,
             env=spawn_env,
-            # Subprocess agents are fire-and-forget; unread pipes can block long-lived runs.
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=stdout_f,
+            stderr=stderr_f,
             cwd=cwd,
         )
         self._processes[agent_name] = process
@@ -155,7 +168,10 @@ class SubprocessBackend(SpawnBackend):
             agent_name=agent_name,
             backend="subprocess",
             pid=process.pid,
-            command=list(final_command),
+            command=list(final_command) + [
+                f"# stdout_log={stdout_path}",
+                f"# stderr_log={stderr_path}",
+            ],
         )
 
         return f"Agent '{agent_name}' spawned as subprocess (pid={process.pid})"

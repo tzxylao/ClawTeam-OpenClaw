@@ -38,11 +38,25 @@ def repo_root(path: Path) -> Path:
 
 
 def current_branch(repo: Path) -> str:
-    """Return the current branch name (or HEAD for detached)."""
+    """Return a usable base ref for new worktrees.
+
+    Prefer the symbolic branch name. If HEAD is detached, or the branch name
+    cannot be resolved as a local ref in this repository, fall back to the
+    current commit SHA so `git worktree add -b ... <base_ref>` still works.
+    """
     try:
-        return _run(["symbolic-ref", "--short", "HEAD"], cwd=repo)
+        branch = _run(["symbolic-ref", "--short", "HEAD"], cwd=repo)
+        # Empty repos can report a branch name without a resolvable commit.
+        _run(["rev-parse", "--verify", branch], cwd=repo)
+        return branch
     except GitError:
-        return _run(["rev-parse", "--short", "HEAD"], cwd=repo)
+        pass
+
+    try:
+        return _run(["rev-parse", "--verify", "HEAD"], cwd=repo)
+    except GitError:
+        # Unborn branches have no commit yet; return HEAD as a sentinel ref.
+        return "HEAD"
 
 
 def create_worktree(

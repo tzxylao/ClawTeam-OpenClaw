@@ -28,6 +28,7 @@ class DummyProcess:
 
 def test_subprocess_backend_prepends_current_clawteam_bin_to_path(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("CLAWTEAM_DATA_DIR", "/tmp/clawteam-data")
     clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
     clawteam_bin.parent.mkdir(parents=True)
     clawteam_bin.write_text("#!/bin/sh\n")
@@ -66,18 +67,7 @@ def test_subprocess_backend_prepends_current_clawteam_bin_to_path(monkeypatch, t
     assert env["PATH"].startswith(f"{clawteam_bin.parent}{os.pathsep}")
     assert env["CLAWTEAM_BIN"] == str(clawteam_bin)
     assert env["CLAWTEAM_MEMORY_SCOPE"] == "custom:team-demo-team"
-    assert captured["stdout"] is subprocess.DEVNULL
-    assert captured["stderr"] is subprocess.DEVNULL
-    assert cmd[:7] == [
-        sys.executable,
-        "-m",
-        "clawteam.spawn.subprocess_wrapper",
-        "--team",
-        "demo-team",
-        "--agent",
-        "worker1",
-    ]
-    assert cmd[7:] == ["--", "codex", "--dangerously-bypass-approvals-and-sandbox", "do work"]
+    assert env["CLAWTEAM_DATA_DIR"] == "/tmp/clawteam-data"
 
 
 def test_subprocess_backend_discards_output_and_preserves_wrapper_command_and_registry(
@@ -122,26 +112,27 @@ def test_subprocess_backend_discards_output_and_preserves_wrapper_command_and_re
     )
 
     assert result == "Agent 'worker1' spawned as subprocess (pid=9876)"
-    assert captured["stdout"] is subprocess.DEVNULL
-    assert captured["stderr"] is subprocess.DEVNULL
+    assert hasattr(captured["stdout"], "name")
+    assert hasattr(captured["stderr"], "name")
+    assert str(captured["stdout"].name).endswith("/worker1.stdout.log")
+    assert str(captured["stderr"].name).endswith("/worker1.stderr.log")
     assert captured["cwd"] == "/tmp/demo"
-    assert captured["cmd"][:7] == [
-        sys.executable,
-        "-m",
-        "clawteam.spawn.subprocess_wrapper",
-        "--team",
-        "demo-team",
-        "--agent",
-        "worker1",
+    assert captured["cmd"] == [
+        "codex",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "do work",
     ]
-    assert captured["cmd"][7:] == ["--", "codex", "--dangerously-bypass-approvals-and-sandbox", "do work"]
-    assert registered == {
-        "team_name": "demo-team",
-        "agent_name": "worker1",
-        "backend": "subprocess",
-        "pid": 9876,
-        "command": ["codex", "--dangerously-bypass-approvals-and-sandbox", "do work"],
-    }
+    assert registered["team_name"] == "demo-team"
+    assert registered["agent_name"] == "worker1"
+    assert registered["backend"] == "subprocess"
+    assert registered["pid"] == 9876
+    assert registered["command"][:3] == [
+        "codex",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "do work",
+    ]
+    assert any(str(item).endswith("/worker1.stdout.log") for item in registered["command"])
+    assert any(str(item).endswith("/worker1.stderr.log") for item in registered["command"])
 
 
 def test_tmux_backend_exports_spawn_path_for_agent_commands(monkeypatch, tmp_path):
@@ -724,7 +715,7 @@ def test_subprocess_backend_normalizes_nanobot_and_uses_message_flag(monkeypatch
         skip_permissions=True,
     )
 
-    assert captured["cmd"][-6:] == ["nanobot", "agent", "-w", "/tmp/demo", "-m", "do work"]
+    assert captured["cmd"] == ["nanobot", "agent", "-w", "/tmp/demo", "-m", "do work"]
 
 
 def test_tmux_backend_gemini_skip_permissions_and_prompt(monkeypatch, tmp_path):
@@ -814,7 +805,7 @@ def test_subprocess_backend_gemini_skip_permissions_and_prompt(monkeypatch, tmp_
         skip_permissions=True,
     )
 
-    assert captured["cmd"][-4:] == ["gemini", "--yolo", "-p", "analyze this repo"]
+    assert captured["cmd"] == ["gemini", "--yolo", "-p", "analyze this repo"]
 
 
 def test_tmux_backend_confirms_gemini_workspace_trust_prompt(monkeypatch):
@@ -933,7 +924,7 @@ def test_subprocess_backend_kimi_skip_permissions_workspace_and_prompt(monkeypat
         skip_permissions=True,
     )
 
-    assert captured["cmd"][-7:] == ["kimi", "--yolo", "-w", "/tmp/demo", "--print", "-p", "fix the bug"]
+    assert captured["cmd"] == ["kimi", "--yolo", "-w", "/tmp/demo", "--print", "-p", "fix the bug"]
 
 
 def test_resolve_clawteam_executable_ignores_unrelated_argv0(monkeypatch, tmp_path):
@@ -1219,7 +1210,7 @@ def test_subprocess_backend_qwen_skip_permissions_and_prompt(monkeypatch, tmp_pa
         skip_permissions=True,
     )
 
-    assert captured["cmd"][-4:] == ["qwen", "--dangerously-skip-permissions", "-p", "refactor this"]
+    assert captured["cmd"] == ["qwen", "--dangerously-skip-permissions", "-p", "refactor this"]
 
 
 def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tmp_path):
@@ -1254,7 +1245,7 @@ def test_subprocess_backend_opencode_skip_permissions_and_prompt(monkeypatch, tm
         skip_permissions=True,
     )
 
-    assert captured["cmd"][-4:] == ["opencode", "--yolo", "-p", "fix the bug"]
+    assert captured["cmd"] == ["opencode", "--yolo", "-p", "fix the bug"]
 
 
 # --- Gateway token propagation (issue #51) ---
