@@ -12,7 +12,7 @@ Your goal: {goal}
 
 Workflow:
 1. Frame the decision or planning problem clearly
-2. Create focused tasks for each specialist via `clawteam task create {team_name} "[task]" -o [member]`
+2. Reuse the canonical template tasks that already exist for each specialist. Do not create duplicate tasks for the same specialist role unless a real gap appears.
 3. Send context and instructions via `clawteam inbox send {team_name} [member] "[instructions]"`
 4. Monitor progress via `clawteam task list {team_name}` and `clawteam inbox peek {team_name} --agent strategy-lead`
 5. Wait for the decision-editor's strategy memo by re-checking the inbox/task state, not shell sleep commands
@@ -23,7 +23,8 @@ Workflow:
    - execution sequence
    - next steps
 
-You must not finalize the recommendation until the decision-editor has delivered the memo."""
+You must not finalize the recommendation until the decision-editor has delivered the memo.
+If you create any truly new follow-up task because the built-in template tasks are insufficient, keep it tightly scoped and make sure it is either completed, reassigned clearly, or explicitly marked as intentionally deferred before you finish."""
 
 [[template.agents]]
 name = "systems-analyst"
